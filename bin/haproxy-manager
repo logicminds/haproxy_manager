@@ -1,0 +1,268 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'trollop'
+require 'json'
+require 'haproxy_manager'
+require 'logger'
+
+
+#
+# if ARGV.length == 2
+#   @servername = ARGV.first
+#   @action  = ARGV[1]
+# else
+#   puts "Must specify a srvid and action (enable or disable)"
+#   puts "example: #{__FILE__} srvid"
+#   puts haproxy.servers
+#   exit -1
+# end
+#
+#
+# if ! haproxy.servers.include?(@servername)
+#   puts "server id not valid"
+#   exit -1
+# end
+# if @action == 'enable'
+#   haproxy.enable(@servername)
+# elsif @action == 'disable'
+#   haproxy.disable(@servername)
+# else
+#   puts "invalid action (enable or disable only)"
+#   exit -1
+# end
+#
+# exit 0
+#Actions# ping enable disable status list info backend_status server_status server_status backend_server_status weight, verify
+class Manager
+
+  attr_reader :socket, :ha, :encoding_type
+
+  def initialize(socketpath, output_type='text')
+     @encoding_type = output_type
+     @socket = socketpath
+  end
+
+  def disable(server, backend=nil)
+    begin
+      backends = ha.disable(server, backend)
+    rescue Exception => e
+      fail(e.message)
+    end
+    if return_json?
+        backends.to_json
+    else
+      "#{server} disabled in backends:\n#{backends.join("\n")}"
+    end
+
+  end
+
+  def enable(server, backend=nil)
+    begin
+      backends = ha.enable(server, backend)
+    rescue Exception => e
+      fail(e.message)
+    end
+    if return_json?
+      backends.to_json
+    else
+      "#{server} enabled in backends:\n#{backends.join("\n")}"
+    end
+  end
+
+  def list(type='all')
+    output = []
+    case type
+      when 'all'
+        output = {:servers => ha.server_instances.keys.sort, :backends => ha.backend_instances.keys }
+      when 'servers'
+        output = ha.server_instances.keys.sort
+      when 'backends'
+        output = ha.backend_instances.keys.sort
+      else
+        fail("#{type} not a supported type of list")
+    end
+    if return_json?
+      output.to_json
+    else
+      if output.instance_of?(Hash)
+        JSON.pretty_generate(output)
+      else
+        output.join("\n")
+      end
+
+    end
+  end
+
+  private
+
+  def logger
+    Logger.new(STDOUT)
+  end
+
+  def return_json?
+    encoding_type.downcase == 'json'
+  end
+
+  def ha
+    if @ha.nil?
+      if File.exists?(socket)
+        @ha ||= HAProxyManager::Instance.new(socket)
+      else
+        logger.warn("Could not find socket at: #{socket}")
+        fail("Could not find socket at: #{socket}")
+      end
+    end
+    @ha
+  end
+
+#   def info
+#     data = "\n"
+#     ha.info.each do | key, value|
+#       data << "#{key}  =   #{value}\n"
+#     end
+#     data
+#   end
+#
+#
+#   def list(type)
+#     case type
+#       when 'servers'
+#         ha.server_instances.keys.join("\n")
+#       when 'backends'
+#         ha.backend_instances.keys.join("\n")
+#       else
+#         fail("#{type} not a supported type of list")
+#     end
+#   end
+#
+#
+#
+# # sets or gets the weight in a specific backend or all backends
+#   def weight(server, weight=nil, backend=nil)
+#     begin
+#       if ! ha.server_instances.has_key?(server)
+#         fail("Invalid Server ID: #{server}")
+#       end
+#       svr = ha.server_instances[server]
+#       if ! weight.nil?
+#         backends_changed = svr.set_weight(weight, backend)
+#       end
+#       after_weight = svr.weight(backend)
+#     rescue Exception => e
+#       fail(e.message)
+#     end
+#     "#{server} currently has weight of #{after_weight.uniq.to_s}"
+#   end
+#
+#   def status(server=nil, backend=nil)
+#     data = ""
+#     data << backend_status(backend)
+#     data << "\n"
+#     data << server_status(server, backend)
+#   end
+#
+#   def backend_server_status(backend, server=nil)
+#     bk_status = "\nBackend\n----------------------\n"
+#     svr_status = "\nServers\n----------------------\n"
+#
+#     begin
+#       back = ha.backend_instances[backend]
+#       bk_status << "#{back.name} = #{back.status}\n"
+#       if server.nil?
+#         back.servers.each do | name, instance|
+#           svr_status << "#{instance.name} = #{instance.status(backend)}\n"
+#         end
+#       else
+#         svr = back.servers[server]
+#         svr_status << "\t#{svr.name} = #{svr.status(backend)}\n"
+#       end
+#     rescue Exception => e
+#       fail(e.message)
+#     end
+#     bk_status << svr_status
+#   end
+#
+#   def backend_status(backend=nil)
+#     bk_status = "\nBackends\n----------------------\n"
+#     begin
+#       if backend.nil?
+#         ha.backend_instances.each_value do | value|
+#           bk_status << "#{value.name} = #{value.status}\n"
+#         end
+#       else
+#         bk_instance = ha.backend_instances[backend]
+#         fail('Invalid backend instance') if bk_instance.nil?
+#         bk_status << "#{backend} = #{bk_instance.status}"
+#       end
+#     rescue Exception => e
+#       fail(e.message)
+#     end
+#     bk_status
+#   end
+#
+#   def server_status(server=nil, backend=nil)
+#     # show all server statuses
+#     begin
+#       if server.nil? and backend.nil?
+#         data = "\nServers\n----------------------\n"
+#         ha.backend_instances.each do | backname, bk|
+#           bk.servers.each_value do | value|
+#             data << "#{backname}/#{value.name} = #{value.status(backname)}\n"
+#           end
+#         end
+#       elsif backend.nil?
+#         data = "\nStatus for #{server} in the following backends\n----------------------\n"
+#         # show status in all backends for the paticular server
+#         ha.backend_instances.each_value do | back|
+#           if back.servers.has_key?(server)
+#             svr = back.servers[server]
+#             data << "#{back.name}/#{server} = #{svr.status(back.name)}\n"
+#           end
+#         end
+#       else
+#         data = "\nStatus for Server #{server}\n----------------------\n"
+#         # status for a specific backend and server
+#         sv_status = ha.backend_instances[backend].servers[server].status(backend)
+#         data << "#{backend}/#{server} = #{sv_status}\n"
+#       end
+#     rescue Exception => e
+#       fail(e.message)
+#     end
+#     data
+#   end
+end
+
+opts = Trollop::options do
+  opt :action, "The action to perform on the server: enable|disable|list" , :type => :string, :require => :true
+  opt :encoding_type, "Set the encoding type of the returned output: text|json" , :type => :string, :default => 'text'
+  opt :server, "The server name to control, if backend is not set perform action on all backends with server", :type => :string
+  opt :backend, "The backend name to control.  Used to only perform the action on the backend specified\n" +
+    "If used in conjunction with server the action will only be performed on the server in the backend", :type => :string
+  opt :socketpath, "The full path to the haproxy instance socket file", :type => :string, :required => :true
+end
+
+manager = Manager.new(opts[:socketpath], opts[:encoding_type])
+
+case opts[:action]
+  when 'status'
+    puts "Unsupported action #{opts[:action]}"
+  when 'enable'
+    puts manager.enable(opts[:server], opts[:backend])
+  when 'disable'
+    puts manager.disable(opts[:server], opts[:backend])
+  when 'list'
+    if opts[:server].nil? and opts[:backend].nil?
+      puts manager.list
+    elsif opts[:server].nil?
+      puts manager.list('servers')
+    elsif opts[:backend].nil?
+      puts manager.list('backends')
+    else
+      puts manager.list
+    end
+  else
+    puts "Unsupported action #{opts[:action]}"
+end
+
+
